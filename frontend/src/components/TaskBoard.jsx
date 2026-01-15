@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 
-const TaskBoard = ({ events, resources, tasks, onCreateTask }) => {
+const TaskBoard = ({ events, resources, tasks, onCreateTask, onPlaceSandbags }) => {
   const [selection, setSelection] = useState({});
 
   const resourceOptions = useMemo(
@@ -10,6 +10,11 @@ const TaskBoard = ({ events, resources, tasks, onCreateTask }) => {
         label: `${resource.name} (${resource.available}/${resource.total})`,
         disabled: resource.available <= 0
       })),
+    [resources]
+  );
+
+  const sandbagResource = useMemo(
+    () => resources.find((resource) => resource.code === "sandbags"),
     [resources]
   );
 
@@ -56,6 +61,13 @@ const TaskBoard = ({ events, resources, tasks, onCreateTask }) => {
                   disabled={!selection[event.id]}
                 >
                   Maßnahme anlegen
+                </button>
+                <button
+                  onClick={() => onPlaceSandbags(event)}
+                  className="px-3 py-2 rounded-lg bg-amber-500 text-white text-sm hover:bg-amber-600 disabled:opacity-50"
+                  disabled={!sandbagResource || sandbagResource.available <= 0}
+                >
+                  Sandsackwall setzen
                 </button>
               </div>
             </div>

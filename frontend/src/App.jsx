@@ -3,6 +3,7 @@ import { io } from "socket.io-client";
 import MapComponent from "./components/MapComponent.jsx";
 import EventTicker from "./components/EventTicker.jsx";
 import TaskBoard from "./components/TaskBoard.jsx";
+import MissionLog from "./components/MissionLog.jsx";
 
 const getRole = () => {
   const params = new URLSearchParams(window.location.search);
@@ -11,11 +12,13 @@ const getRole = () => {
 
 const App = () => {
   const role = getRole();
+  const userLabel = role === "master" ? "Admin" : "Stab";
   const socketRef = useRef(null);
   const [events, setEvents] = useState([]);
   const [resources, setResources] = useState([]);
   const [tasks, setTasks] = useState([]);
-  const [mapCenter, setMapCenter] = useState([51.335, 12.373]);
+  const [missionLog, setMissionLog] = useState([]);
+  const [mapCenter, setMapCenter] = useState([48.835, 12.964]);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -33,6 +36,7 @@ const App = () => {
       setEvents(state.events || []);
       setResources(state.resources || []);
       setTasks(state.tasks || []);
+      setMissionLog(state.missionLog || []);
       setMapCenter([state.mapCenter.lat, state.mapCenter.lng]);
     };
 
@@ -40,6 +44,7 @@ const App = () => {
       setEvents(state.events || []);
       setResources(state.resources || []);
       setTasks(state.tasks || []);
+      setMissionLog(state.missionLog || []);
     };
 
     const handleResourceError = (payload) => {
@@ -66,11 +71,11 @@ const App = () => {
   }, []);
 
   const handleInjectScenario = (scenario) => {
-    socketRef.current?.emit("event:inject", { scenario });
+    socketRef.current?.emit("event:inject", { scenario, user: userLabel });
   };
 
   const handleMoveEvent = (eventId, lat, lng) => {
-    socketRef.current?.emit("event:move", { eventId, lat, lng });
+    socketRef.current?.emit("event:move", { eventId, lat, lng, user: userLabel });
   };
 
   const handleCreateTask = (event, resourceId) => {
@@ -81,7 +86,26 @@ const App = () => {
     socketRef.current?.emit("task:create", {
       eventId: event.id,
       resourceId,
-      title
+      title,
+      user: userLabel
+    });
+  };
+
+  const handlePlaceSandbags = (event) => {
+    const input = window.prompt("Wie viele Sandsäcke?", "500");
+    if (!input) {
+      return;
+    }
+    const amount = Number(input);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setError("Bitte eine gültige Zahl für Sandsäcke eingeben.");
+      setTimeout(() => setError(""), 4000);
+      return;
+    }
+    socketRef.current?.emit("sandbag:place", {
+      eventId: event.id,
+      amount,
+      user: userLabel
     });
   };
 
@@ -139,8 +163,10 @@ const App = () => {
               resources={resources}
               tasks={tasks}
               onCreateTask={handleCreateTask}
+              onPlaceSandbags={handlePlaceSandbags}
             />
           )}
+          <MissionLog entries={missionLog} />
         </div>
       </main>
     </div>
