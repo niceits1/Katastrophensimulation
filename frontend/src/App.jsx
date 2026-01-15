@@ -4,6 +4,7 @@ import MapComponent from "./components/MapComponent.jsx";
 import EventTicker from "./components/EventTicker.jsx";
 import TaskBoard from "./components/TaskBoard.jsx";
 import MissionLog from "./components/MissionLog.jsx";
+import ScoreBoard from "./components/ScoreBoard.jsx";
 
 const getRole = () => {
   const params = new URLSearchParams(window.location.search);
@@ -19,7 +20,11 @@ const App = () => {
   const [tasks, setTasks] = useState([]);
   const [missionLog, setMissionLog] = useState([]);
   const [mapCenter, setMapCenter] = useState([48.835, 12.964]);
+  const [resilienceScore, setResilienceScore] = useState(100);
+  const [scoreFlash, setScoreFlash] = useState(false);
   const [error, setError] = useState("");
+  const [toasts, setToasts] = useState([]);
+  const prevScoreRef = useRef(100);
 
   useEffect(() => {
     const socketUrl =
@@ -38,6 +43,7 @@ const App = () => {
       setTasks(state.tasks || []);
       setMissionLog(state.missionLog || []);
       setMapCenter([state.mapCenter.lat, state.mapCenter.lng]);
+      setResilienceScore(state.resilienceScore ?? 100);
     };
 
     const handleUpdate = (state) => {
@@ -45,6 +51,7 @@ const App = () => {
       setResources(state.resources || []);
       setTasks(state.tasks || []);
       setMissionLog(state.missionLog || []);
+      setResilienceScore(state.resilienceScore ?? 100);
     };
 
     const handleResourceError = (payload) => {
@@ -56,16 +63,26 @@ const App = () => {
       setError("Backend nicht erreichbar.");
     };
 
+    const handleToast = (payload) => {
+      const id = crypto.randomUUID();
+      setToasts((prev) => [...prev, { id, ...payload }]);
+      setTimeout(() => {
+        setToasts((prev) => prev.filter((toast) => toast.id !== id));
+      }, 4000);
+    };
+
     socket.on("state:init", handleInit);
     socket.on("state:update", handleUpdate);
     socket.on("error:resource_unavailable", handleResourceError);
     socket.on("connect_error", handleConnectError);
+    socket.on("toast", handleToast);
 
     return () => {
       socket.off("state:init", handleInit);
       socket.off("state:update", handleUpdate);
       socket.off("error:resource_unavailable", handleResourceError);
       socket.off("connect_error", handleConnectError);
+      socket.off("toast", handleToast);
       socket.disconnect();
     };
   }, []);
@@ -91,6 +108,10 @@ const App = () => {
     });
   };
 
+  const handleTaskUpdate = (taskId, status) => {
+    socketRef.current?.emit("task:update", { taskId, status, user: userLabel });
+  };
+
   const handlePlaceSandbags = (event) => {
     const input = window.prompt("Wie viele Sandsäcke?", "500");
     if (!input) {
@@ -113,11 +134,19 @@ const App = () => {
     .map((resource) => `${resource.name}: ${resource.available}/${resource.total}`)
     .join(" · ");
 
+  useEffect(() => {
+    if (resilienceScore > prevScoreRef.current) {
+      setScoreFlash(true);
+      setTimeout(() => setScoreFlash(false), 700);
+    }
+    prevScoreRef.current = resilienceScore;
+  }, [resilienceScore]);
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
-      <header className="border-b border-slate-800 px-4 py-4 sm:px-6 bg-slate-900">
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <header className="border-b border-slate-800 px-4 py-4 sm:px-6 bg-slate-900 relative">
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <h1 className="text-lg sm:text-xl font-semibold">
                 Blackout Tabletop MVP
@@ -126,6 +155,7 @@ const App = () => {
                 Rolle: {role === "master" ? "Übungsleiter" : "Stab"}
               </div>
             </div>
+            <ScoreBoard score={resilienceScore} flash={scoreFlash} />
             <a
               href={role === "master" ? "?role=staff" : "?role=master"}
               className="text-sm text-sky-300 hover:text-sky-200"
@@ -164,11 +194,27 @@ const App = () => {
               tasks={tasks}
               onCreateTask={handleCreateTask}
               onPlaceSandbags={handlePlaceSandbags}
+              onTaskUpdate={handleTaskUpdate}
             />
           )}
           <MissionLog entries={missionLog} />
         </div>
       </main>
+
+      <div className="fixed top-4 right-4 z-50 space-y-2">
+        {toasts.map((toast) => (
+          <div
+            key={toast.id}
+            className={`px-4 py-3 rounded-lg shadow-lg text-sm border ${
+              toast.type === "error"
+                ? "bg-red-950 border-red-800 text-red-200"
+                : "bg-emerald-950 border-emerald-800 text-emerald-200"
+            }`}
+          >
+            {toast.message}
+          </div>
+        ))}
+      </div>
     </div>
   );
 };
