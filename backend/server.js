@@ -19,6 +19,14 @@ const io = new Server(server, {
 });
 
 const deggendorfCenter = { lat: 48.835, lng: 12.964 };
+const RESILIENCE_MAX = 100;
+const RESILIENCE_MIN = 0;
+const RESILIENCE_DECAY_PER_EVENT = 0.1;
+const RESILIENCE_EXPIRE_PENALTY = 15;
+const RESILIENCE_RESOLVE_BONUS = 5;
+const RESOURCE_FAILURE_RATE = 0.15;
+const RESOURCE_LOCK_MS = 30 * 1000;
+const DEFAULT_TTL_SECONDS = 10 * 60;
 const logFilePath = path.join(__dirname, "data", "mission-log.jsonl");
 
 const ensureLogDir = () => {
@@ -50,6 +58,8 @@ const appendMissionLog = (entry) => {
   ensureLogDir();
   fs.appendFileSync(logFilePath, `${JSON.stringify(entry)}\n`);
 };
+
+const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 
 const seedState = () => ({
   resources: [
@@ -84,6 +94,8 @@ const seedState = () => ({
       title: "Isar-Ufer tritt in Fischerdorf über",
       type: "fire",
       status: "active",
+      critical: true,
+      ttlSeconds: DEFAULT_TTL_SECONDS,
       location: { lat: 48.857, lng: 12.979 },
       createdAt: Date.now()
     },
@@ -92,6 +104,8 @@ const seedState = () => ({
       title: "Kreisstraße DEG 23 überflutet",
       type: "thw",
       status: "active",
+      critical: true,
+      ttlSeconds: DEFAULT_TTL_SECONDS,
       location: { lat: 48.836, lng: 12.949 },
       createdAt: Date.now()
     },
@@ -100,11 +114,15 @@ const seedState = () => ({
       title: "Betreuungsstelle Stadthalle vorbereiten",
       type: "san",
       status: "active",
+      critical: true,
+      ttlSeconds: DEFAULT_TTL_SECONDS,
       location: { lat: 48.831, lng: 12.966 },
       createdAt: Date.now()
     }
   ],
   tasks: [],
+  resilienceScore: RESILIENCE_MAX,
+  resourceLocks: {},
   missionLog: loadMissionLog(),
   mapCenter: deggendorfCenter
 });
@@ -114,6 +132,17 @@ const state = seedState();
 const emitState = () => {
   io.emit("state:update", state);
 };
+
+const createEvent = ({ title, type, location, ttlSeconds, critical }) => ({
+  id: uuidv4(),
+  title,
+  type,
+  status: "active",
+  critical: critical ?? true,
+  ttlSeconds: ttlSeconds ?? DEFAULT_TTL_SECONDS,
+  location,
+  createdAt: Date.now()
+});
 
 const createLogEntry = ({ user, action, details }) => ({
   id: uuidv4(),
@@ -154,14 +183,13 @@ const injectFloodScenario = (user) => {
   ];
 
   incidents.forEach((incident) => {
-    state.events.push({
-      id: uuidv4(),
-      title: incident.title,
-      type: incident.type,
-      status: "active",
-      location: incident.location,
-      createdAt: Date.now()
-    });
+    state.events.push(
+      createEvent({
+        title: incident.title,
+        type: incident.type,
+        location: incident.location
+      })
+    );
   });
 
   logAction({
@@ -170,6 +198,145 @@ const injectFloodScenario = (user) => {
     details: "Deichbruch Fischerdorf ausgelöst."
   });
 };
+
+const lockResource = (resourceId, now) => {
+  state.resourceLocks[resourceId] = now + RESOURCE_LOCK_MS;
+};
+
+const isResourceLocked = (resourceId, now) => {
+  const lockedUntil = state.resourceLocks[resourceId];
+  return lockedUntil && lockedUntil > now;
+};
+
+const attemptResourceAction = ({ socket, resource, quantity, user, successMsg, failMsg }) => {
+  const now = Date.now();
+  if (isResourceLocked(resource.id, now)) {
+    socket.emit("toast", {
+      type: "error",
+      message: "Ressource ist noch gesperrt."
+    });
+    return { ok: false };
+  }
+
+  if (Math.random() < RESOURCE_FAILURE_RATE) {
+    lockResource(resource.id, now);
+    resource.lockedUntil = state.resourceLocks[resource.id];
+    socket.emit("toast", { type: "error", message: failMsg });
+    logAction({
+      user,
+      action: "FAILURE",
+      details: failMsg
+    });
+    emitState();
+    return { ok: false };
+  }
+
+  if (resource.available < quantity) {
+    socket.emit("toast", {
+      type: "error",
+      message: "Nicht genügend Ressourcen verfügbar."
+    });
+    return { ok: false };
+  }
+
+  resource.available -= quantity;
+  socket.emit("toast", { type: "success", message: successMsg });
+  return { ok: true };
+};
+
+const updateEventTimers = () => {
+  const now = Date.now();
+  let updated = false;
+
+  state.events.forEach((event) => {
+    if (!event.ttlSeconds || event.status === "resolved") {
+      return;
+    }
+
+    if (!event.ttlExpiresAt) {
+      event.ttlExpiresAt = event.createdAt + event.ttlSeconds * 1000;
+    }
+
+    event.ttlRemainingMs = Math.max(event.ttlExpiresAt - now, 0);
+    if (!event.expired && event.ttlRemainingMs === 0) {
+      event.expired = true;
+      event.status = "expired";
+      updated = true;
+
+      const followUp = createEvent({
+        title: "Überflutung Industriegebiet",
+        type: "fire",
+        location: {
+          lat: event.location.lat + 0.005,
+          lng: event.location.lng + 0.004
+        }
+      });
+      state.events.push(followUp);
+
+      state.resilienceScore = clamp(
+        state.resilienceScore - RESILIENCE_EXPIRE_PENALTY,
+        RESILIENCE_MIN,
+        RESILIENCE_MAX
+      );
+
+      logAction({
+        user: "System",
+        action: "ESCALATION",
+        details: `${event.title} eskaliert zu "${followUp.title}".`
+      });
+    }
+  });
+
+  return updated;
+};
+
+const updateResilience = () => {
+  const criticalCount = state.events.filter(
+    (event) => event.critical && event.status === "active"
+  ).length;
+  if (criticalCount === 0) {
+    return false;
+  }
+
+  const nextScore = clamp(
+    state.resilienceScore - criticalCount * RESILIENCE_DECAY_PER_EVENT,
+    RESILIENCE_MIN,
+    RESILIENCE_MAX
+  );
+  const changed = nextScore !== state.resilienceScore;
+  state.resilienceScore = nextScore;
+  return changed;
+};
+
+const updateResourceLocks = () => {
+  const now = Date.now();
+  let updated = false;
+  Object.entries(state.resourceLocks).forEach(([resourceId, lockedUntil]) => {
+    if (lockedUntil <= now) {
+      delete state.resourceLocks[resourceId];
+      const resource = state.resources.find((item) => item.id === resourceId);
+      if (resource) {
+        resource.lockedUntil = null;
+      }
+      updated = true;
+    } else {
+      const resource = state.resources.find((item) => item.id === resourceId);
+      if (resource) {
+        resource.lockedUntil = lockedUntil;
+      }
+    }
+  });
+  return updated;
+};
+
+setInterval(() => {
+  const changedTimers = updateEventTimers();
+  const changedScore = updateResilience();
+  const changedLocks = updateResourceLocks();
+  if (changedTimers || changedScore || changedLocks) {
+    emitState();
+  }
+}, 1000);
 
 io.on("connection", (socket) => {
   socket.emit("state:init", state);
@@ -197,14 +364,25 @@ io.on("connection", (socket) => {
 
   socket.on("task:create", ({ eventId, resourceId, title, user }) => {
     const resource = state.resources.find((item) => item.id === resourceId);
-    if (!resource || resource.available <= 0) {
-      socket.emit("error:resource_unavailable", {
-        message: "Keine Ressourcen mehr verfügbar."
+    if (!resource) {
+      socket.emit("toast", {
+        type: "error",
+        message: "Ressource nicht gefunden."
       });
       return;
     }
 
-    resource.available -= 1;
+    const attempt = attemptResourceAction({
+      socket,
+      resource,
+      quantity: 1,
+      user,
+      successMsg: "Einsatzziel erreicht!",
+      failMsg: "⚠️ Konvoi steckengeblieben! Verzögerung!"
+    });
+    if (!attempt.ok) {
+      return;
+    }
 
     const task = {
       id: uuidv4(),
@@ -230,15 +408,41 @@ io.on("connection", (socket) => {
     emitState();
   });
 
+  socket.on("task:update", ({ taskId, status, user }) => {
+    const task = state.tasks.find((item) => item.id === taskId);
+    if (!task) {
+      return;
+    }
+    task.status = status;
+
+    if (status === "done") {
+      const event = state.events.find((item) => item.id === task.eventId);
+      if (event) {
+        event.status = "resolved";
+      }
+      state.resilienceScore = clamp(
+        state.resilienceScore + RESILIENCE_RESOLVE_BONUS,
+        RESILIENCE_MIN,
+        RESILIENCE_MAX
+      );
+      logAction({
+        user,
+        action: "RESOLVE",
+        details: `Maßnahme abgeschlossen: ${task.title}`
+      });
+    }
+
+    emitState();
+  });
+
   socket.on("marker:add", ({ title, type, location, user }) => {
-    state.events.push({
-      id: uuidv4(),
-      title,
-      type,
-      status: "active",
-      location,
-      createdAt: Date.now()
-    });
+    state.events.push(
+      createEvent({
+        title,
+        type,
+        location
+      })
+    );
 
     logAction({
       user,
@@ -252,13 +456,25 @@ io.on("connection", (socket) => {
   socket.on("resource:consume", ({ resourceId, amount, note, user }) => {
     const resource = state.resources.find((item) => item.id === resourceId);
     const quantity = Number(amount || 0);
-    if (!resource || quantity <= 0 || resource.available < quantity) {
-      socket.emit("error:resource_unavailable", {
-        message: "Nicht genügend Ressourcen verfügbar."
+    if (!resource || quantity <= 0) {
+      socket.emit("toast", {
+        type: "error",
+        message: "Ungültige Ressourcenmenge."
       });
       return;
     }
-    resource.available -= quantity;
+
+    const attempt = attemptResourceAction({
+      socket,
+      resource,
+      quantity,
+      user,
+      successMsg: "Einsatzziel erreicht!",
+      failMsg: "⚠️ Konvoi steckengeblieben! Verzögerung!"
+    });
+    if (!attempt.ok) {
+      return;
+    }
 
     logAction({
       user,
@@ -272,9 +488,10 @@ io.on("connection", (socket) => {
   socket.on("sandbag:place", ({ eventId, amount, user }) => {
     const resource = state.resources.find((item) => item.code === "sandbags");
     const quantity = Number(amount || 0);
-    if (!resource || quantity <= 0 || resource.available < quantity) {
-      socket.emit("error:resource_unavailable", {
-        message: "Nicht genügend Sandsäcke verfügbar."
+    if (!resource || quantity <= 0) {
+      socket.emit("toast", {
+        type: "error",
+        message: "Ungültige Sandsackmenge."
       });
       return;
     }
@@ -284,16 +501,27 @@ io.on("connection", (socket) => {
       return;
     }
 
-    resource.available -= quantity;
-
-    state.events.push({
-      id: uuidv4(),
-      title: `Sandsackwall bei ${event.title}`,
-      type: "thw",
-      status: "active",
-      location: event.location,
-      createdAt: Date.now()
+    const attempt = attemptResourceAction({
+      socket,
+      resource,
+      quantity,
+      user,
+      successMsg: "Einsatzziel erreicht!",
+      failMsg: "⚠️ Konvoi steckengeblieben! Verzögerung!"
     });
+    if (!attempt.ok) {
+      return;
+    }
+
+    state.events.push(
+      createEvent({
+        title: `Sandsackwall bei ${event.title}`,
+        type: "thw",
+        location: event.location,
+        ttlSeconds: DEFAULT_TTL_SECONDS,
+        critical: false
+      })
+    );
 
     logAction({
       user,
