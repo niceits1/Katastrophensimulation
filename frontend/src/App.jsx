@@ -91,11 +91,11 @@ const App = () => {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
-      <header className="border-b border-slate-800 px-6 py-4 bg-slate-900">
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center justify-between">
+      <header className="border-b border-slate-800 px-4 py-4 sm:px-6 bg-slate-900">
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <h1 className="text-xl font-semibold">
+              <h1 className="text-lg sm:text-xl font-semibold">
                 Blackout Tabletop MVP
               </h1>
               <div className="text-sm text-slate-400">
@@ -109,26 +109,28 @@ const App = () => {
               Wechsel zu {role === "master" ? "Stab" : "Übungsleiter"}
             </a>
           </div>
-          <div className="text-sm text-amber-300 bg-amber-950/60 border border-amber-800 rounded-md px-3 py-2">
+          <div className="text-xs sm:text-sm text-amber-300 bg-amber-950/60 border border-amber-800 rounded-md px-3 py-2">
             Ressourcen: {resourceSummary || "Lade..."}
           </div>
           {error && (
-            <div className="text-sm text-red-300 bg-red-950/60 border border-red-800 rounded-md px-3 py-2">
+            <div className="text-xs sm:text-sm text-red-300 bg-red-950/60 border border-red-800 rounded-md px-3 py-2">
               {error}
             </div>
           )}
         </div>
       </header>
 
-      <main className="grid grid-cols-1 xl:grid-cols-[1.2fr_1fr] gap-6 p-6 h-[calc(100vh-160px)]">
-        <MapComponent
-          events={events}
-          center={mapCenter}
-          canEdit={role === "master" || role === "staff"}
-          onMove={handleMoveEvent}
-        />
+      <main className="flex flex-col xl:grid xl:grid-cols-[1.2fr_1fr] gap-4 sm:gap-6 p-4 sm:p-6">
+        <div className="h-[55vh] sm:h-[60vh] xl:h-[calc(100vh-200px)]">
+          <MapComponent
+            events={events}
+            center={mapCenter}
+            canEdit={role === "master" || role === "staff"}
+            onMove={handleMoveEvent}
+          />
+        </div>
 
-        <div className="space-y-6 overflow-y-auto">
+        <div className="space-y-4 sm:space-y-6 max-h-[45vh] xl:max-h-[calc(100vh-200px)] overflow-y-auto pb-6">
           {role === "master" ? (
             <EventTicker events={events} onInjectScenario={handleInjectScenario} />
           ) : (
