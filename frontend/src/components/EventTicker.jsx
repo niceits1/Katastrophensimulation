@@ -6,7 +6,7 @@ const EventTicker = ({ events, onInjectScenario }) => {
         <div className="flex flex-col gap-2">
           <button
             onClick={() => onInjectScenario("deichbruch_fischerdorf")}
-            className="px-3 py-2 rounded-lg bg-red-500 text-white text-sm hover:bg-red-600"
+            className="px-3 py-2 rounded-lg bg-red-500 text-white text-sm hover:bg-red-600 transition active:scale-95"
           >
             Szenario: Deichbruch Fischerdorf
           </button>
