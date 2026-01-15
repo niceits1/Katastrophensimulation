@@ -11,6 +11,12 @@ const markerColors = {
   flood: { fill: "#0ea5e9", stroke: "#bae6fd" }
 };
 
+const getTtlColor = (ratio) => {
+  if (ratio <= 0.1) return "bg-red-500";
+  if (ratio <= 0.5) return "bg-yellow-400";
+  return "bg-emerald-500";
+};
+
 const createIcon = (color) =>
   L.divIcon({
     className: "",
@@ -75,7 +81,20 @@ const MapComponent = ({ events, center, canEdit, onMove }) => {
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
-        {events.map((event) => (
+        {events.map((event) => {
+          const ttlTotal = event.ttlSeconds ? event.ttlSeconds * 1000 : null;
+          const ttlRemaining =
+            typeof event.ttlRemainingMs === "number"
+              ? event.ttlRemainingMs
+              : ttlTotal;
+          const ratio =
+            ttlTotal && ttlRemaining !== null
+              ? Math.max(ttlRemaining / ttlTotal, 0)
+              : null;
+          const barClass = ratio !== null ? getTtlColor(ratio) : null;
+          const pulseClass = ratio !== null && ratio <= 0.1 ? "ttl-pulse" : "";
+
+          return (
           <Marker
             key={event.id}
             position={[event.location.lat, event.location.lng]}
@@ -92,10 +111,24 @@ const MapComponent = ({ events, center, canEdit, onMove }) => {
               <div className="text-sm">
                 <div className="font-semibold text-slate-900">{event.title}</div>
                 <div className="text-slate-700">Status: {event.status}</div>
+                {ratio !== null && (
+                  <div className="mt-2">
+                    <div className="text-xs text-slate-600 mb-1">
+                      Reaktionszeit
+                    </div>
+                    <div className="h-2 w-full rounded-full bg-slate-200 overflow-hidden">
+                      <div
+                        className={`h-full ${barClass} ${pulseClass}`}
+                        style={{ width: `${Math.max(ratio * 100, 2)}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
             </Popup>
           </Marker>
-        ))}
+        );
+        })}
       </MapContainer>
     </div>
   );
