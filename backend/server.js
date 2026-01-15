@@ -1,6 +1,8 @@
 const express = require("express");
 const http = require("http");
 const cors = require("cors");
+const path = require("path");
+const fs = require("fs");
 const { Server } = require("socket.io");
 const { v4: uuidv4 } = require("uuid");
 
@@ -11,7 +13,7 @@ app.use(express.json());
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "*",
+    origin: process.env.FRONTEND_ORIGIN || "*",
     methods: ["GET", "POST"]
   }
 });
@@ -167,6 +169,14 @@ io.on("connection", (socket) => {
 app.get("/health", (req, res) => {
   res.json({ ok: true });
 });
+
+const distPath = path.join(__dirname, "..", "frontend", "dist");
+if (fs.existsSync(distPath)) {
+  app.use(express.static(distPath));
+  app.get("*", (req, res) => {
+    res.sendFile(path.join(distPath, "index.html"));
+  });
+}
 
 const PORT = process.env.PORT || 4000;
 server.listen(PORT, () => {

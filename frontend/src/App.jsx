@@ -19,7 +19,12 @@ const App = () => {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    const socket = io("http://localhost:4000", {
+    const socketUrl =
+      import.meta.env.VITE_SOCKET_URL ||
+      (window.location.hostname === "localhost"
+        ? "http://localhost:4000"
+        : window.location.origin);
+    const socket = io(socketUrl, {
       transports: ["websocket", "polling"]
     });
     socketRef.current = socket;
